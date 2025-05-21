@@ -4,7 +4,7 @@ import asyncio
 import logging
 from pyrogram import Client, filters
 from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, ForceReply, CallbackQuery
-from helper.utils import is_subscribed, get_size # THIS LINE IS CORRECTED: 'is_req_admin' has been removed
+from helper.utils import is_req_admin, is_subscribed, get_size # RE-ADDED is_req_admin and is_subscribed
 from config import Config
 from helper.database import db # Correctly imports your Database instance named 'db'
 from plugins.antinsfw import nsfw_detect_video, nsfw_detect_image
@@ -55,11 +55,11 @@ async def set_rename_source_callback(client: Client, query: CallbackQuery):
 async def file_for_rename_handler(client: Client, message: Message):
     user_id = message.from_user.id
 
-    # Check for force subscription
+    # Check for force subscription - NOW USING THE is_subscribed FROM helper.utils
     if Config.FORCE_SUB_CHANNEL: # Assuming Config.FORCE_SUB_CHANNEL is a single ID
         try:
             invite_link = await client.create_chat_invite_link(Config.FORCE_SUB_CHANNEL)
-            if not await is_subscribed(client, message, invite_link):
+            if not await is_subscribed(client, message, invite_link): # UNCOMMENTED
                 return
         except Exception as e:
             logger.error(f"Force Sub Error for user {user_id}: {e}")
@@ -102,11 +102,11 @@ async def file_for_rename_handler(client: Client, message: Message):
 async def initiate_rename_command(client: Client, message: Message):
     user_id = message.from_user.id
     
-    # Check for force subscription
+    # Check for force subscription - NOW USING THE is_subscribed FROM helper.utils
     if Config.FORCE_SUB_CHANNEL:
         try:
             invite_link = await client.create_chat_invite_link(Config.FORCE_SUB_CHANNEL)
-            if not await is_subscribed(client, message, invite_link):
+            if not await is_subscribed(client, message, invite_link): # UNCOMMENTED
                 return
         except Exception as e:
             logger.error(f"Force Sub Error for user {user_id}: {e}")
@@ -217,13 +217,6 @@ async def initiate_rename_command(client: Client, message: Message):
             return # Stop processing this file
 
     # --- END OF DAILY LIMIT AND PREMIUM CHECK ---
-
-    # --- REMOVE OLD NON_PREMIUM_FILE_SIZE_LIMIT CHECK ---
-    # This block was here, and has has been removed based on your request.
-    # if not is_premium:
-    #     if hasattr(media, 'file_size') and media.file_size > Config.NON_PREMIUM_FILE_SIZE_LIMIT:
-    #         await message.reply_text(...)
-    # --- END REMOVAL ---
 
     # Check for NSFW content *before* adding to queue to save resources
     is_nsfw = False
