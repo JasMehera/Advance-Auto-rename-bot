@@ -1,41 +1,33 @@
-import aiohttp, asyncio, warnings, pytz
+import os
+import asyncio
+import warnings
+import time
 from datetime import datetime, timedelta
 from pytz import timezone
-from pyrogram import Client, __version__
+from pyrogram import Client, __version__, idle
 from pyrogram.raw.all import layer
-from config import Config
-from aiohttp import web
-from route import web_server
 import pyrogram.utils
-import pyromod
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
-import os
-from flask import Flask, jsonify
-import time
+from pyromod import listen # This is important for pyromod functions
+from aiohttp import web # For webhook
+from route import web_server # Assuming 'route.py' exists and defines web_server
+from config import Config # Your Config file
+from helper.database import db # Your database instance
+
+# Suppress unclosed client session warnings from aiohttp
+warnings.filterwarnings("ignore", category=ResourceWarning, message="unclosed client session")
 
 pyrogram.utils.MIN_CHANNEL_ID = -1009147483647
 
-# Create Flask app
-flask_app = Flask(__name__)
-
-@flask_app.route('/uptime', methods=['GET'])
-def uptime():
-    return jsonify({"status": "ok"}), 200
-
-def run_flask():
-    flask_app.run(host="0.0.0.0", port=int(os.environ.get("FLASK_PORT", 5000)))
-
-
-# Setting SUPPORT_CHAT directly here
+# Setting SUPPORT_CHAT directly here (ensure this is an integer chat ID)
 SUPPORT_CHAT = int(os.environ.get("SUPPORT_CHAT", "-1002607710343"))
 
-PORT = Config.PORT
+PORT = Config.PORT # Get PORT from Config
 
 class Bot(Client):
-
     def __init__(self):
         super().__init__(
-            name="codeflixbots",
+            name="codeflixbots", # The name of your bot session
             api_id=Config.API_ID,
             api_hash=Config.API_HASH,
             bot_token=Config.BOT_TOKEN,
@@ -45,17 +37,32 @@ class Bot(Client):
         )
         # Initialize the bot's start time for uptime calculation
         self.start_time = time.time()
+        # Initialize aiohttp session for potential HTTP requests later if needed
+        self.aiohttp_session = None 
+    
+    async def start(self):
+        # This is called automatically by Pyrogram's .run()
+        await super().start() # Calls the parent (Client) start method
+        
+        # Connect to MongoDB
+        await db.connect()
+        print("Connected to MongoDB!")
 
-    async def start(self, *args, **kwargs):
-        await super().start(*args, **kwargs)
+        # Initialize aiohttp session if not already done
+        if not self.aiohttp_session:
+            self.aiohttp_session = aiohttp.ClientSession()
+
         me = await self.get_me()
         self.mention = me.mention
         self.username = me.username  
-        self.uptime = Config.BOT_UPTIME     
+        
+        # Start Webhook if enabled
         if Config.WEBHOOK:
             app = web.AppRunner(await web_server())
             await app.setup()       
-            await web.TCPSite(app, "0.0.0.0", PORT).start()     
+            await web.TCPSite(app, "0.0.0.0", PORT).start()
+            print(f"Webhook server started on port {PORT}") # Confirmation message
+        
         print(f"{me.first_name} Is Started.....✨️")
 
         # Calculate uptime using timedelta
@@ -84,6 +91,26 @@ class Bot(Client):
                 )
 
             except Exception as e:
-                print(f"Failed to send message in chat {chat_id}: {e}")
+                print(f"Failed to send startup message in chat {chat_id}: {e}")
+        
+        # Keep the bot running indefinitely, listening for updates
+        await idle()
 
-Bot().run()
+    async def stop(self, *args):
+        # This is called automatically by Pyrogram's .run() on shutdown
+        await super().stop() # Calls the parent (Client) stop method
+        
+        if self.aiohttp_session:
+            await self.aiohttp_session.close() # Close aiohttp session
+            print("aiohttp session closed.")
+            
+        await db.close() # Close database connection
+        print("Bot stopped and disconnected from MongoDB.")
+
+
+if __name__ == "__main__":
+    # The .run() method of Pyrogram Client handles the entire event loop.
+    # We simply instantiate the bot and call run().
+    print("Attempting to start bot...")
+    Bot().run()
+    print("Bot process finished.")
