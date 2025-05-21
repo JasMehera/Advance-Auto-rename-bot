@@ -4,7 +4,7 @@ import asyncio
 import logging
 from pyrogram import Client, filters
 from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, ForceReply, CallbackQuery
-from helper.utils import is_req_admin, is_subscribed, get_size
+from helper.utils import is_subscribed, get_size # THIS LINE IS CORRECTED: 'is_req_admin' has been removed
 from config import Config
 from helper.database import db # Correctly imports your Database instance named 'db'
 from plugins.antinsfw import nsfw_detect_video, nsfw_detect_image
@@ -25,7 +25,7 @@ user_pending_renames = {} # {user_id: original_message_id}
 
 # Text for the /renamesource menu
 RENAME_SOURCE_TEXT = """**Diablo Rename Bot 2:**
-Cʜᴏᴏsᴇ ᴛʜᴇ ᴏᴘᴛɪᴏɴ ʙᴇʟᴏᴡ:
+Choose the option below:
 
 » **Caption:** Bot will check the caption of the file for renaming.
 » **Filename:** Bot will check the original filename for renaming."""
@@ -153,7 +153,7 @@ async def initiate_rename_command(client: Client, message: Message):
                 reply_markup=ForceReply(True) # Force reply to get the name
             )
             return
-    
+            
     # If no file is associated after all checks
     if not original_file_message:
         await message.reply_text("Please reply to a **document, video, or audio file** with `/rename <new name>`, or send the file first then send the new name.")
@@ -176,8 +176,8 @@ async def initiate_rename_command(client: Client, message: Message):
             new_file_name = message.text
             original_message_id = user_pending_renames.get(user_id) # Get it back from pending, or set it to None if not there
             if not original_message_id: # This should not happen if logic is followed
-                 await message.reply_text("Seems like you didn't send the file before sending the name. Please send the file first!")
-                 return
+                    await message.reply_text("Seems like you didn't send the file before sending the name. Please send the file first!")
+                    return
             try:
                 original_file_message = await client.get_messages(chat_id=user_id, message_ids=original_message_id)
                 if not (original_file_message and (original_file_message.document or original_file_message.video or original_file_message.audio)):
@@ -219,7 +219,7 @@ async def initiate_rename_command(client: Client, message: Message):
     # --- END OF DAILY LIMIT AND PREMIUM CHECK ---
 
     # --- REMOVE OLD NON_PREMIUM_FILE_SIZE_LIMIT CHECK ---
-    # This block was here, and has been removed based on your request.
+    # This block was here, and has has been removed based on your request.
     # if not is_premium:
     #     if hasattr(media, 'file_size') and media.file_size > Config.NON_PREMIUM_FILE_SIZE_LIMIT:
     #         await message.reply_text(...)
