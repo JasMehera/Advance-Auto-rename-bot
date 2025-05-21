@@ -1,8 +1,16 @@
-import motor.motor_asyncio, datetime, pytz
+import motor.motor_asyncio
+import datetime
+import pytz
 from config import Config
-import logging  # Added for logging errors and important information
-from .utils import send_log
+import logging
+from .utils import send_log # Assuming this is correct for your setup
 
+# Configure logging for the database module
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
 
 class Database:
     def __init__(self, uri, database_name):
@@ -17,6 +25,7 @@ class Database:
         self.col = self.codeflixbots.user
 
     def new_user(self, id):
+        # Ensure 'daily_rename_count' and 'last_rename_reset' are initialized for new users
         return dict(
             _id=int(id),
             join_date=datetime.date.today().isoformat(),
@@ -36,7 +45,10 @@ class Database:
                 ban_duration=0,
                 banned_on=datetime.date.max.isoformat(),
                 ban_reason=''
-            )
+            ),
+            daily_rename_count=0, # New: Initialize daily count
+            last_rename_reset=datetime.datetime.now(pytz.utc).isoformat(), # New: Initialize last reset time
+            daily_limit=None # New: Optional custom daily limit, None means use default
         )
 
     async def add_user(self, b, m):
@@ -188,7 +200,7 @@ class Database:
     async def set_video(self, user_id, video):
         await self.col.update_one({'_id': int(user_id)}, {'$set': {'video': video}})
 
-    # Premium User Methods
+    # --- Premium User Methods (Existing, ensure they use datetime.datetime.now(pytz.utc)) ---
     async def is_premium_user(self, id):
         """Check if a user is premium and their subscription hasn't expired"""
         try:
@@ -203,9 +215,9 @@ class Database:
             if not expiry:
                 return False
                 
-            # Convert string to datetime
-            expiry_date = datetime.datetime.fromisoformat(expiry)
-            current_date = datetime.datetime.now(pytz.UTC)
+            # Convert string to datetime and localize to UTC for comparison
+            expiry_date = datetime.datetime.fromisoformat(expiry).replace(tzinfo=pytz.utc)
+            current_date = datetime.datetime.now(pytz.utc)
             
             # Check if premium has expired
             if current_date > expiry_date:
@@ -225,7 +237,7 @@ class Database:
         """Add or update a user's premium status"""
         try:
             # Calculate expiry date
-            current_date = datetime.datetime.now(pytz.UTC)
+            current_date = datetime.datetime.now(pytz.utc)
             
             # Parse duration string (format: Xm/Xh/Xd/Xmh where X is a number)
             duration_value = int(duration[:-1] if duration[-2:] != "mh" else duration[:-2])
@@ -239,7 +251,7 @@ class Database:
                 expiry_date = current_date + datetime.timedelta(days=duration_value)
             elif duration_unit == "mh":  # month
                 # Add months (approximately)
-                expiry_date = current_date + datetime.timedelta(days=30 * duration_value)
+                expiry_date = current_date + datetime.timedelta(days=30 * duration_value) # Using 30 days as an approximation for a month
             else:
                 raise ValueError(f"Invalid duration format: {duration}")
             
@@ -285,5 +297,76 @@ class Database:
             logging.error(f"Error removing premium from user {id}: {e}")
             return False
 
+    # --- NEW METHODS FOR DAILY LIMITS (ADD THESE) ---
 
-codeflixbots = Database(Config.DB_URL, Config.DB_NAME)
+    async def get_daily_limit(self, user_id: int) -> int:
+        """
+        Gets the user's custom daily limit.
+        If no custom limit is set, it returns Config.DEFAULT_DAILY_RENAME_LIMIT.
+        """
+        user = await self.col.find_one({"_id": user_id})
+        # If 'daily_limit' is explicitly set to None, it also means use default.
+        if user and user.get("daily_limit") is not None:
+            return user["daily_limit"]
+        return Config.DEFAULT_DAILY_RENAME_LIMIT # Use a default from Config
+
+    async def set_daily_limit(self, user_id: int, limit: int):
+        """
+        Sets a custom daily renaming limit for a specific user.
+        Set to -1 for unlimited for that specific user.
+        """
+        await self.col.update_one(
+            {"_id": user_id},
+            {"$set": {"daily_limit": limit}},
+            upsert=True
+        )
+        logger.info(f"Set daily limit for user {user_id} to {limit}")
+
+    async def get_daily_rename_count(self, user_id: int) -> tuple[int, int]:
+        """
+        Gets the user's current daily rename count and their specific limit.
+        Resets the count to 0 if a new day has started since the last reset.
+        Returns (current_count, limit_for_user).
+        """
+        user = await self.col.find_one({"_id": user_id})
+        
+        # Get current time in UTC to avoid timezone issues
+        current_datetime_utc = datetime.datetime.now(pytz.utc)
+        current_date_utc = current_datetime_utc.date()
+        
+        count = user.get("daily_rename_count", 0) if user else 0
+        
+        # Get last_rename_reset, default to current UTC datetime if not found
+        last_reset_dt = datetime.datetime.fromisoformat(user.get("last_rename_reset", current_datetime_utc.isoformat())).replace(tzinfo=pytz.utc) if user else current_datetime_utc
+        last_reset_date_utc = last_reset_dt.date()
+
+        limit_for_user = await self.get_daily_limit(user_id) # Get their specific limit
+
+        if last_reset_date_utc < current_date_utc:
+            # A new day has started, reset the count
+            count = 0
+            await self.col.update_one(
+                {"_id": user_id},
+                {"$set": {"daily_rename_count": 0, "last_rename_reset": current_datetime_utc.isoformat()}},
+                upsert=True
+            )
+            logger.info(f"Daily rename count reset for user {user_id}. New day.")
+        
+        return count, limit_for_user
+
+    async def increment_daily_rename_count(self, user_id: int):
+        """Increments the user's daily rename count."""
+        # Ensure the count is reset if a new day started before incrementing
+        # This call implicitly handles the daily reset logic
+        await self.get_daily_rename_count(user_id)
+        
+        await self.col.update_one(
+            {"_id": user_id},
+            {"$inc": {"daily_rename_count": 1}},
+            upsert=True
+        )
+        logger.info(f"Incremented daily rename count for user {user_id}")
+
+# Initialize the Database class with your Config values
+# This line is likely at the very end of your database.py
+db = Database(Config.DB_URL, Config.DB_NAME)
