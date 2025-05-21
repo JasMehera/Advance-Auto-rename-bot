@@ -1,3 +1,9 @@
+# plugins/antinsfw.py
+
+import logging
+
+logger = logging.getLogger(__name__)
+
 nsfw_keywords = {
     "general": [
         "porn", "sex", "nude", "naked", "boobs", "tits", "pussy", "dick", "cock", "ass",
@@ -54,3 +60,7 @@ async def check_anti_nsfw(new_name, message):
                 await message.reply_text("You can't rename files with NSFW content.")
                 return True
     return False
+
+# You only need one detection function based on keywords, so nsfw_detect_video and nsfw_detect_image
+# can be removed or call check_anti_nsfw if you still want to use those names in filerenamer.
+# For simplicity, we'll modify filerenamer to directly use check_anti_nsfw.
