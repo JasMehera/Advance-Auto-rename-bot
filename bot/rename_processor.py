@@ -1,4 +1,3 @@
-
 import os
 import re
 import time
@@ -7,16 +6,16 @@ import asyncio
 import logging
 from datetime import datetime
 from PIL import Image
-from pyrogram import Client, filters
+from pyrogram import Client
 from pyrogram.errors import FloodWait
 from pyrogram.types import InputMediaDocument, Message
 from hachoir.metadata import extractMetadata
 from hachoir.parser import createParser
-from plugins.antinsfw import check_anti_nsfw
 from helper.utils import progress_for_pyrogram, humanbytes, convert
-from helper.database import codeflixbots
+from helper.database import db # Make sure this imports your Database instance named 'db'
 from config import Config
 from pymongo import MongoClient
+from typing import Dict, Any, Tuple
 
 # Configure logging
 logging.basicConfig(
@@ -25,13 +24,10 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Global dictionary to track ongoing operations
-renaming_operations = {}
-
 # Database connection for checking sequence mode
 db_client = MongoClient(Config.DB_URL)
-db = db_client[Config.DB_NAME]
-sequence_collection = db["active_sequences"]
+db_mongo = db_client[Config.DB_NAME] # Renamed to avoid conflict with `helper.database.db`
+sequence_collection = db_mongo["active_sequences"]
 
 # Enhanced regex patterns for season and episode extraction
 SEASON_EPISODE_PATTERNS = [
@@ -57,7 +53,7 @@ QUALITY_PATTERNS = [
     (re.compile(r'\b(2k|1440p)\b', re.IGNORECASE), lambda m: "2k"),
     (re.compile(r'\b(HDRip|HDTV)\b', re.IGNORECASE), lambda m: m.group(1)),
     (re.compile(r'\b(4kX264|4kx265)\b', re.IGNORECASE), lambda m: m.group(1)),
-    (re.compile(r'\[(\d{3,4}[pi])\]', re.IGNORECASE), lambda m: m.group(1))  # [1080p]
+    (re.compile(r'\[(\d{3,4}[pi])\]', re.IGNORECASE), lambda m: m.group(1))   # [1080p]
 ]
 
 def is_in_sequence_mode(user_id):
@@ -122,16 +118,15 @@ async def add_metadata(input_path, output_path, user_id):
             return
         except Exception as e:
             logger.error(f"Error copying file: {e}")
-            # If copying fails, we'll just use the original file
-            raise RuntimeError(f"Failed to process file: {e}")
-    
+            raise RuntimeError(f"Failed to process file: {e}") # Re-raise to indicate failure
+            
     metadata = {
-        'title': await codeflixbots.get_title(user_id),
-        'artist': await codeflixbots.get_artist(user_id),
-        'author': await codeflixbots.get_author(user_id),
-        'video_title': await codeflixbots.get_video(user_id),
-        'audio_title': await codeflixbots.get_audio(user_id),
-        'subtitle': await codeflixbots.get_subtitle(user_id)
+        'title': await db.get_title(user_id),
+        'artist': await db.get_artist(user_id),
+        'author': await db.get_author(user_id),
+        'video_title': await db.get_video(user_id),
+        'audio_title': await db.get_audio(user_id),
+        'subtitle': await db.get_subtitle(user_id)
     }
     
     cmd = [
@@ -185,196 +180,229 @@ def format_caption(caption_template, filename, filesize, duration):
     caption = caption.replace("{duration}", duration)
     
     return caption
-        
-# Use a higher group number to ensure it only runs if the sequence handler doesn't handle the message
-@Client.on_message(filters.private & (filters.document | filters.video | filters.audio), group=1)
-async def auto_rename_files(client, message):
-    """Main handler for auto-renaming files"""
-    user_id = message.from_user.id
+    
+# --- The main processing function called by the queue ---
+async def process_rename_task(
+    client: Client,
+    user_id: int,
+    message_dict: Dict[str, Any], # Dictionary representation of the original message
+    file_id: str,
+    new_name: str,
+    rename_source: str,
+    original_message_id: int, # The ID of the message that initiated the rename
+    processing_message_id: int # The ID of the message sent by the bot for "Processing..."
+) -> Tuple[bool, str]:
+    """
+    Processes a single file renaming task. This function is called by the RenameQueue worker.
+    """
+    chat_id = message_dict["chat"]["id"]
+    
+    # Reconstruct essential media info from message_dict
+    media = None
+    media_type = None
+    file_original_name = "unknown_file"
+    file_size = 0
 
-    # Check if user is premium
-    is_premium = await codeflixbots.is_premium_user(user_id)
-    
-    if not is_premium:
-        return await message.reply_text(
-            "❌ **Premium Feature** ❌\n\n"
-            "File renaming is a premium feature.\n"
-            "Contact @introvertsama to rename files."
-        )
-    
+    if message_dict.get('document'):
+        media = message_dict['document']
+        media_type = "document"
+        file_original_name = media.get('file_name', 'document_file')
+        file_size = media.get('file_size', 0)
+    elif message_dict.get('video'):
+        media = message_dict['video']
+        media_type = "video"
+        file_original_name = media.get('file_name', 'video_file')
+        file_size = media.get('file_size', 0)
+    elif message_dict.get('audio'):
+        media = message_dict['audio']
+        media_type = "audio"
+        file_original_name = media.get('file_name', 'audio_file')
+        file_size = media.get('file_size', 0)
+    else:
+        logger.error(f"process_rename_task: No valid media found in message_dict for user {user_id}")
+        return False, "Unsupported file type or missing media info."
+
     # Skip if user is in sequence mode
     if is_in_sequence_mode(user_id):
-        logger.info(f"User {user_id} is in sequence mode, skipping rename")
-        return
-    
-    format_template = await codeflixbots.get_format_template(user_id)
-    
-    if not format_template:
-        return await message.reply_text("Please set a rename format using /autorename")
-
-    # Get file information
-    if message.document:
-        file_id = message.document.file_id
-        file_name = message.document.file_name
-        file_size = message.document.file_size
-        media_type = "document"
-    elif message.video:
-        file_id = message.video.file_id
-        file_name = message.video.file_name or "video"
-        file_size = message.video.file_size
-        media_type = "video"
-    elif message.audio:
-        file_id = message.audio.file_id
-        file_name = message.audio.file_name or "audio"
-        file_size = message.audio.file_size
-        media_type = "audio"
-    else:
-        return await message.reply_text("Unsupported file type")
-
-    # NSFW check
-    if await check_anti_nsfw(file_name, message):
-        return await message.reply_text("NSFW content detected")
-
-    # Prevent duplicate processing
-    if file_id in renaming_operations:
-        if (datetime.now() - renaming_operations[file_id]).seconds < 10:
-            return
-    renaming_operations[file_id] = datetime.now()
+        logger.info(f"User {user_id} is in sequence mode, skipping rename in processor")
+        return False, "User is in sequence mode. Cannot rename this file."
 
     # Initialize paths to None for proper cleanup handling
     download_path = None
     metadata_path = None
     thumb_path = None
+    
+    # Attempt to get or create the processing message to update progress
+    msg = None
+    try:
+        msg = await client.get_messages(chat_id=chat_id, message_ids=processing_message_id)
+        await msg.edit_text("⏳ Your file is now being processed...")
+    except Exception:
+        # If the original processing message is gone, send a new one
+        msg = await client.send_message(chat_id=chat_id, text="⏳ Your file is now being processed...")
+
+    if not msg: # If even sending a new message failed
+        logger.error(f"Failed to obtain/send processing message for user {user_id}")
+        return False, "Failed to send status updates."
+
 
     try:
-        # Extract metadata from filename
-        season, episode = extract_season_episode(file_name)
-        quality = extract_quality(file_name)
-        
-        # Replace placeholders in template
-        replacements = {
-            '{season}': season or 'XX',
-            '{episode}': episode or 'XX',
-            '{quality}': quality,
-            'Season': season or 'XX',
-            'Episode': episode or 'XX',
-            'QUALITY': quality
-        }
-        
-        for placeholder, value in replacements.items():
-            format_template = format_template.replace(placeholder, value)
+        # Extract metadata from original file name (if needed for auto-naming based on template)
+        # Note: 'new_name' is already the target name from filerenamer.py.
+        # This section is for extracting season/episode/quality from the *original* file name
+        # which might be used if 'new_name' is not fully specified or if user
+        # relies on an 'autorename' template. Assuming `new_name` is final here.
+        season, episode = extract_season_episode(file_original_name)
+        quality = extract_quality(file_original_name)
 
-        # Prepare file paths
-        ext = os.path.splitext(file_name)[1] or ('.mp4' if media_type == 'video' else '.mp3')
-        new_filename = f"{format_template}{ext}"
-        download_path = f"downloads/{new_filename}"
-        metadata_path = f"metadata/{new_filename}"
+        # Determine file extension
+        ext = os.path.splitext(file_original_name)[1]
+        if not ext and media_type == 'video':
+            ext = '.mp4'
+        elif not ext and media_type == 'audio':
+            ext = '.mp3'
+        elif not ext and media_type == 'document':
+            mime_type = media.get('mime_type')
+            if mime_type:
+                ext = '.' + mime_type.split('/')[-1]
+            else:
+                ext = '.bin'
+
+        final_filename = f"{new_name}{ext}" # Use the provided new_name + derived extension
+
+        download_path = os.path.join("downloads", final_filename)
+        metadata_path = os.path.join("metadata", final_filename) # Path where metadata-added file will be saved
         
         os.makedirs(os.path.dirname(download_path), exist_ok=True)
         os.makedirs(os.path.dirname(metadata_path), exist_ok=True)
 
         # Download file
-        msg = await message.reply_text("**Downloading...**")
+        await msg.edit_text("**Downloading...**")
         try:
             file_path = await client.download_media(
-                message,
+                file_id,
                 file_name=download_path,
                 progress=progress_for_pyrogram,
                 progress_args=("Downloading...", msg, time.time())
             )
         except Exception as e:
-            await msg.edit(f"Download failed: {e}")
+            await msg.edit_text(f"Download failed: {e}")
             raise
 
         # Process metadata
-        await msg.edit("**Processing metadata...**")
+        await msg.edit_text("**Processing metadata...**")
         try:
             await add_metadata(file_path, metadata_path, user_id)
-            file_path = metadata_path
+            file_path_for_upload = metadata_path # Use the file with metadata
+        except RuntimeError as e: # Catch custom RuntimeError from add_metadata
+            logger.warning(f"Metadata addition failed for user {user_id}, using original downloaded file: {e}")
+            file_path_for_upload = download_path # Fallback to original downloaded file
+            await msg.edit_text(f"Metadata processing failed: {e}. Attempting to upload original file.")
         except Exception as e:
-            await msg.edit(f"Metadata processing failed: {e}")
-            raise
+            logger.error(f"An unexpected error occurred during metadata processing for user {user_id}: {e}", exc_info=True)
+            return False, f"Metadata processing failed unexpectedly: {e}"
+
 
         # Get duration for video/audio files
         duration = "00:00:00"
         if media_type in ["video", "audio"]:
-            duration = get_file_duration(file_path)
+            duration = get_file_duration(file_path_for_upload)
 
         # Prepare for upload
-        await msg.edit("**Preparing upload...**")
+        await msg.edit_text("**Preparing upload...**")
         
         # Get caption template and replace variables
-        caption_template = await codeflixbots.get_caption(message.chat.id)
+        caption_template = await db.get_caption(user_id) # Use user_id directly
         if caption_template:
-            caption = format_caption(caption_template, new_filename, file_size, duration)
+            caption = format_caption(caption_template, final_filename, file_size, duration)
         else:
-            caption = f"**{new_filename}**"
+            caption = f"**{final_filename}**"
             
-        thumb = await codeflixbots.get_thumbnail(message.chat.id)
-
-        # Handle thumbnail - initialize thumb_path explicitly
-        if thumb:
-            thumb_path = await client.download_media(thumb)
-        elif media_type == "video" and message.video.thumbs:
-            thumb_path = await client.download_media(message.video.thumbs[0].file_id)
+        # Get user thumbnail preference or original video thumbnail from message_dict
+        thumb_file_id = await db.get_thumbnail(user_id)
         
-        # Only process if thumb_path was set
+        if thumb_file_id:
+            thumb_path = await client.download_media(thumb_file_id)
+        elif media_type == "video" and media.get('thumbs'): # Check if video and has thumbs in message_dict
+            thumb_path = await client.download_media(media['thumbs'][0]['file_id']) # Get largest thumb
+            
         if thumb_path:
             thumb_path = await process_thumbnail(thumb_path)
 
-        # Get user's media preference
-        user_media_preference = await codeflixbots.get_media_preference(user_id)
+        # Get user's preferred media type for sending (document/video/audio)
+        user_media_preference = await db.get_media_preference(user_id)
         logger.info(f"User {user_id} media preference: {user_media_preference}")
         
-        # If no preference set, use original media type
         if not user_media_preference:
             user_media_preference = media_type
-            logger.info(f"No preference set, using original type: {media_type}")
+            logger.info(f"No preference set for user {user_id}, using original type: {media_type}")
         else:
-            # Convert to lowercase for consistent comparison
             user_media_preference = user_media_preference.lower()
-            logger.info(f"Using user's preference: {user_media_preference}")
+            logger.info(f"Using user's preference: {user_media_preference} for user {user_id}")
 
         # Upload file
-        await msg.edit("**Uploading...**")
+        await msg.edit_text("**Uploading...**")
         try:
             upload_params = {
-                'chat_id': message.chat.id,
+                'chat_id': chat_id,
                 'caption': caption,
                 'progress': progress_for_pyrogram,
                 'progress_args': ("Uploading...", msg, time.time())
             }
             
-            # Only add thumb to parameters if it exists
             if thumb_path:
                 upload_params['thumb'] = thumb_path
 
             # Use user's media preference for sending
             if user_media_preference == "document":
-                await client.send_document(document=file_path, **upload_params)
+                await client.send_document(document=file_path_for_upload, **upload_params)
             elif user_media_preference == "video":
-                await client.send_video(video=file_path, **upload_params)
+                # For send_video, need to extract width, height, duration
+                upload_params['duration'] = media.get('duration') or get_file_duration(file_path_for_upload)
+                upload_params['width'] = media.get('width')
+                upload_params['height'] = media.get('height')
+                await client.send_video(video=file_path_for_upload, **upload_params)
             elif user_media_preference == "audio":
-                await client.send_audio(audio=file_path, **upload_params)
-            else:
-                # Fallback to original media type if preference is invalid
-                logger.warning(f"Invalid preference: {user_media_preference}, using original: {media_type}")
+                # For send_audio, need duration, title, performer
+                upload_params['duration'] = media.get('duration') or get_file_duration(file_path_for_upload)
+                upload_params['title'] = media.get('title')
+                upload_params['performer'] = media.get('performer')
+                await client.send_audio(audio=file_path_for_upload, **upload_params)
+            else: # Fallback if preference is invalid
+                logger.warning(f"Invalid preference: {user_media_preference} for user {user_id}, falling back to original media type: {media_type}")
                 if media_type == "document":
-                    await client.send_document(document=file_path, **upload_params)
+                    await client.send_document(document=file_path_for_upload, **upload_params)
                 elif media_type == "video":
-                    await client.send_video(video=file_path, **upload_params)
+                    upload_params['duration'] = media.get('duration') or get_file_duration(file_path_for_upload)
+                    upload_params['width'] = media.get('width')
+                    upload_params['height'] = media.get('height')
+                    await client.send_video(video=file_path_for_upload, **upload_params)
                 elif media_type == "audio":
-                    await client.send_audio(audio=file_path, **upload_params)
+                    upload_params['duration'] = media.get('duration') or get_file_duration(file_path_for_upload)
+                    upload_params['title'] = media.get('title')
+                    upload_params['performer'] = media.get('performer')
+                    await client.send_audio(audio=file_path_for_upload, **upload_params)
 
-            await msg.delete()
+            await msg.delete() # Delete the processing message
+            return True, "File renamed and uploaded successfully!"
+
+        except FloodWait as e:
+            logger.warning(f"FloodWait for user {user_id}: {e.value} seconds")
+            # Edit the processing message with FloodWait info
+            await msg.edit_text(f"Telegram is asking me to wait for {e.value} seconds due to flood limits. Please try again after some time.")
+            await asyncio.sleep(e.value) # Wait for the flood limit
+            return False, f"Flood limit hit, please retry."
         except Exception as e:
-            await msg.edit(f"Upload failed: {e}")
-            raise
+            logger.error(f"Upload failed for user {user_id}: {e}", exc_info=True)
+            if msg: # Ensure msg exists before attempting to edit
+                await msg.edit_text(f"Upload failed: {e}")
+            return False, f"Upload failed: {e}"
 
     except Exception as e:
-        logger.error(f"Processing error: {e}")
-        await message.reply_text(f"Error: {str(e)}")
+        logger.error(f"Overall processing error for user {user_id}: {e}", exc_info=True)
+        if msg: # Ensure msg exists before attempting to edit
+            await msg.edit_text(f"Error during renaming: {str(e)}")
+        return False, f"Error during renaming: {str(e)}"
     finally:
         # Clean up files - safe to pass None values
         await cleanup_files(download_path, metadata_path, thumb_path)
-        renaming_operations.pop(file_id, None)
