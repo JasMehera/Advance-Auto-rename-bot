@@ -4,12 +4,12 @@ id_pattern = re.compile(r'^.\d+$')
 
 class Config(object):
     # pyro client config
-    API_ID    = os.environ.get("API_ID", "0")
-    API_HASH  = os.environ.get("API_HASH", "0")
-    BOT_TOKEN = os.environ.get("BOT_TOKEN", "7871777689:")
+    API_ID    = os.environ.get("API_ID", "28713982")
+    API_HASH  = os.environ.get("API_HASH", "237e15f7c006b10b4fa7c46fee7a5377")
+    BOT_TOKEN = os.environ.get("BOT_TOKEN", "8126440021:AAGRYq6Xeq1QvZHjJkPI6N4-ToM0gXDeTe8")
 
     # database config
-    DB_NAME = os.environ.get("DB_NAME","rename")
+    DB_NAME = os.environ.get("DB_NAME","rename1")
     DB_URL  = os.environ.get("DB_URL","mongodb+srv://drapixstore:Y7DJWJCCpBQClI5o@cluster0.fq7ee6x.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0")
     PORT = os.environ.get("PORT", "8080")
 
@@ -19,11 +19,11 @@ class Config(object):
     ADMIN       = [int(admin) if id_pattern.search(admin) else admin for admin in os.environ.get('ADMIN', '1993048420 5743248220 1214348787').split()]
     
     # Force Subscribe Channel (Adjusted to singular as per filerenamer.py expectation)
-    FORCE_SUB_CHANNEL = int(os.environ.get('FORCE_SUB_CHANNEL', 'YOUR_CHANNEL_ID_HERE')) # Replace YOUR_CHANNEL_ID_HERE with the actual ID, or ensure it's set in env
+    FORCE_SUB_CHANNEL = int(os.environ.get('FORCE_SUB_CHANNEL', '-1002513815996')) # Replace YOUR_CHANNEL_ID_HERE with the actual ID, or ensure it's set in env
     
-    LOG_CHANNEL = int(os.environ.get("LOG_CHANNEL", "-1002667013291"))
+    LOG_CHANNEL = int(os.environ.get("LOG_CHANNEL", "-1002513815996"))
     BOT_OWNER = int(os.environ.get("BOT_OWNER", "7518139247"))
-    DUMP_CHANNEL = int(os.environ.get("DUMP_CHANNEL", "-1002667013291"))
+    DUMP_CHANNEL = int(os.environ.get("DUMP_CHANNEL", "-1002513815996"))
 
     # wes response configuration
     WEBHOOK = bool(os.environ.get("WEBHOOK", "True"))
