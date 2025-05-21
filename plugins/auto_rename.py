@@ -1,13 +1,13 @@
 from pyrogram import Client, filters
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
-from helper.database import codeflixbots
+from helper.database import db # THIS LINE IS CHANGED: from 'codeflixbots' to 'db'
 
 @Client.on_message(filters.private & filters.command("autorename"))
 async def auto_rename_command(client, message):
     user_id = message.from_user.id
     
     # Check if user is premium
-    is_premium = await codeflixbots.is_premium_user(user_id)
+    is_premium = await db.is_premium_user(user_id) # THIS LINE IS CHANGED
     
     if not is_premium:
         return await message.reply_text(
@@ -29,7 +29,7 @@ async def auto_rename_command(client, message):
     format_template = command_parts[1].strip()
 
     # Save the format template in the database
-    await codeflixbots.set_format_template(user_id, format_template)
+    await db.set_format_template(user_id, format_template) # THIS LINE IS CHANGED
 
     # Send confirmation message with the template in monospaced font
     await message.reply_text(
@@ -46,7 +46,7 @@ async def set_media_command(client, message):
     user_id = message.from_user.id
     
     # Check if user is premium
-    is_premium = await codeflixbots.is_premium_user(user_id)
+    is_premium = await db.is_premium_user(user_id) # THIS LINE IS CHANGED
     
     if not is_premium:
         return await message.reply_text(
@@ -74,7 +74,7 @@ async def handle_media_selection(client, callback_query: CallbackQuery):
     user_id = callback_query.from_user.id
     
     # Check if user is premium
-    is_premium = await codeflixbots.is_premium_user(user_id)
+    is_premium = await db.is_premium_user(user_id) # THIS LINE IS CHANGED
     
     if not is_premium:
         await callback_query.answer("This is a premium feature", show_alert=True)
@@ -87,7 +87,7 @@ async def handle_media_selection(client, callback_query: CallbackQuery):
     media_type = callback_query.data.split("_", 1)[1].capitalize()  # Extract and capitalize media type
 
     try:
-        await codeflixbots.set_media_preference(user_id, media_type.lower())
+        await db.set_media_preference(user_id, media_type.lower()) # THIS LINE IS CHANGED
 
         await callback_query.answer(f"Locked in: {media_type} 🎉")
         await callback_query.message.edit_text(
