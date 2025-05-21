@@ -5,7 +5,6 @@ from config import Config, Txt
 from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 import re
 
-
 async def progress_for_pyrogram(current, total, ud_type, message, start):
     now = time.time()
     diff = now - start
@@ -96,7 +95,58 @@ def add_prefix_suffix(input_string, prefix='', suffix=''):
             return f"{prefix}{filename}{extension}"
         else:
             return f"{prefix}{filename} {suffix}{extension}"
-
-
     else:
         return input_string
+
+# --- NEWLY ADDED/UPDATED FUNCTIONS TO RESOLVE IMPORTERRORS ---
+
+async def is_subscribed(client, message, invite_link):
+    """
+    Checks if a user is subscribed to a channel.
+    This is a basic implementation. You might need to adjust based on your exact 'is_subscribed' logic.
+    """
+    if not Config.FORCE_SUB_CHANNEL:
+        return True
+    try:
+        user = await client.get_chat_member(Config.FORCE_SUB_CHANNEL, message.from_user.id)
+        if user.status == "kicked":
+            await message.reply_text("You are banned from the channel. Contact @Union_Owner")
+            return False
+        elif user.status in ["member", "administrator", "creator"]:
+            return True
+        else:
+            await message.reply_text(
+                f"Hey {message.from_user.mention}, you need to join my updates channel to use me!\n\n"
+                f"**Join Channel:** {invite_link}",
+                reply_markup=InlineKeyboardMarkup(
+                    [[InlineKeyboardButton("⚡ Join Channel ⚡", url=invite_link.invite_link)]]
+                )
+            )
+            return False
+    except Exception as e:
+        print(f"Error in is_subscribed: {e}")
+        await message.reply_text(
+            "An error occurred while checking your subscription status. Please try again later."
+        )
+        return False
+
+async def is_req_admin(message):
+    """
+    Checks if the user is an admin according to Config.ADMIN.
+    This is a basic implementation assuming Config.ADMIN is a list of user IDs.
+    """
+    return message.from_user.id in Config.ADMIN
+
+def get_size(size):
+    """
+    Helper function to format file sizes. (This was already in your file)
+    """
+    if not size:
+        return ""
+    power = 2**10
+    n = 0
+    Dic_powerN = {0: ' ', 1: 'K', 2: 'M', 3: 'G', 4: 'T'}
+    while size > power:
+        size /= power
+        n += 1
+    return str(round(size, 2)) + " " + Dic_powerN[n] + 'ʙ'
