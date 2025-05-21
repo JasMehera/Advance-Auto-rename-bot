@@ -1,5 +1,5 @@
 from config import Config, Txt
-from helper.database import codeflixbots
+from helper.database import db # Changed 'codeflixbots' to 'db'
 from pyrogram.types import Message
 from pyrogram import Client, filters
 from pyrogram.errors import FloodWait, InputUserDeactivated, UserIsBlocked, PeerIdInvalid
@@ -31,7 +31,7 @@ async def restart_bot(b, m):
 @Client.on_message(filters.private & filters.command("tutorial"))
 async def tutorial(bot: Client, message: Message):
     user_id = message.from_user.id
-    format_template = await codeflixbots.get_format_template(user_id)
+    format_template = await db.get_format_template(user_id) # Changed 'codeflixbots' to 'db'
     await message.reply_text(
         text=Txt.FILE_NAME_TXT.format(format_template=format_template),
         disable_web_page_preview=True,
@@ -44,7 +44,7 @@ async def tutorial(bot: Client, message: Message):
 
 @Client.on_message(filters.command(["stats", "status"]) & filters.user(Config.ADMIN))
 async def get_stats(bot, message):
-    total_users = await codeflixbots.total_users_count()
+    total_users = await db.total_users_count() # Changed 'codeflixbots' to 'db'
     uptime = time.strftime("%Hh%Mm%Ss", time.gmtime(time.time() - bot.uptime))    
     start_t = time.time()
     st = await message.reply('**Accessing The Details.....**')    
@@ -55,14 +55,14 @@ async def get_stats(bot, message):
 @Client.on_message(filters.command("broadcast") & filters.user(Config.ADMIN) & filters.reply)
 async def broadcast_handler(bot: Client, m: Message):
     await bot.send_message(Config.LOG_CHANNEL, f"{m.from_user.mention} or {m.from_user.id} Is Started The Broadcast......")
-    all_users = await codeflixbots.get_all_users()
+    all_users = await db.get_all_users() # Changed 'codeflixbots' to 'db'
     broadcast_msg = m.reply_to_message
     sts_msg = await m.reply_text("Broadcast Started..!") 
     done = 0
     failed = 0
     success = 0
     start_time = time.time()
-    total_users = await codeflixbots.total_users_count()
+    total_users = await db.total_users_count() # Changed 'codeflixbots' to 'db'
     async for user in all_users:
         sts = await send_msg(user['_id'], broadcast_msg)
         if sts == 200:
@@ -70,7 +70,7 @@ async def broadcast_handler(bot: Client, m: Message):
         else:
            failed += 1
         if sts == 400:
-           await codeflixbots.delete_user(user['_id'])
+           await db.delete_user(user['_id']) # Changed 'codeflixbots' to 'db'
         done += 1
         if not done % 20:
            await sts_msg.edit(f"Broadcast In Progress: \n\nTotal Users {total_users} \nCompleted : {done} / {total_users}\nSuccess : {success}\nFailed : {failed}")
